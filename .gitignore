@@ -1,0 +1,23 @@
+# macOS
+.DS_Store
+
+# Python
+backend/.venv/
+backend/.env
+backend/*.egg-info/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Node / Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/.env.local
+frontend/.env.*.local
+
+# Model artifacts added later
+artifacts/
+*.pt
+*.pth
+
+AGENTS.md
