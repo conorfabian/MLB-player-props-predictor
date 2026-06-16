@@ -20,4 +20,4 @@ artifacts/
 *.pt
 *.pth
 
-AGENTS.md
+/AGENTS.md

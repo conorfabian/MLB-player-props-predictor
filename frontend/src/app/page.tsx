@@ -1,4 +1,5 @@
 import { ApiStatus } from "@/components/ApiStatus";
+import { DailyBoard } from "@/components/DailyBoard";
 
 export default function Home() {
   return (
@@ -10,13 +11,7 @@ export default function Home() {
       </p>
 
       <ApiStatus />
-
-      <section className="mt-8 rounded-lg border p-6">
-        <h2 className="text-xl font-semibold">Today&apos;s Board</h2>
-        <p className="mt-2 text-gray-500">
-          Waiting for database connection.
-        </p>
-      </section>
+      <DailyBoard />
     </main>
   );
 }

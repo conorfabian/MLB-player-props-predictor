@@ -5,6 +5,8 @@ description = "FastAPI backend for the MLB player props walking skeleton."
 requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",
+    "python-dotenv>=1",
+    "supabase>=2",
     "uvicorn[standard]>=0.32.0",
 ]
 
