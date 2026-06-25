@@ -8,6 +8,8 @@ backend/*.egg-info/
 __pycache__/
 *.py[cod]
 .pytest_cache/
+.ruff_cache/
+.mypy_cache/
 
 # Node / Next.js
 frontend/node_modules/
@@ -20,4 +22,6 @@ artifacts/
 *.pt
 *.pth
 
+# Local agent/context files
 /AGENTS.md
+/llms-full.txt
