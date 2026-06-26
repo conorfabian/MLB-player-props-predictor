@@ -9,6 +9,8 @@ export type BoardPick = {
   model_probability: number;
   game_time: string | null;
   result_status: string;
+  actual_value: number | null;
+  graded_at: string | null;
 };
 
 export type DailyBoard = {

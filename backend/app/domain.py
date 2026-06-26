@@ -101,3 +101,20 @@ class BoardDraft:
     status: str
     picks: list[BoardPickDraft]
     metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class BoardPickForGrading:
+    id: int
+    board_id: int
+    slate_date: date
+    rank: int
+    player_name: str
+    prop_type: str
+    line: float
+    side: str
+    game_time: datetime | None
+    result_status: str
+    prop_snapshot_id: int
+    grading_metadata: dict[str, Any]
+    snapshot: PropCandidate

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from typing import Any, cast
 from uuid import uuid4
 
@@ -9,6 +9,7 @@ from supabase import Client
 
 from app.domain import (
     BoardDraft,
+    BoardPickForGrading,
     IngestionRun,
     ModelRun,
     PropCandidate,
@@ -191,6 +192,52 @@ def get_eligible_snapshots_for_run(
     )
     rows = cast(list[dict[str, Any]], result.data or [])
     return [_candidate_from_row(row) for row in rows]
+
+
+def get_pending_board_picks_for_grading(
+    supabase: Client,
+    *,
+    now: datetime,
+    slate_date: date | None = None,
+) -> list[BoardPickForGrading]:
+    query = (
+        supabase.table("board_picks")
+        .select(
+            "id, board_id, rank, player_name, prop_type, line, side, "
+            "game_time, result_status, prop_snapshot_id, grading_metadata, "
+            "daily_boards!inner(slate_date), "
+            "prop_snapshots!inner(*)"
+        )
+        .eq("result_status", "pending")
+        .eq("prop_type", "hits")
+        .eq("side", "over")
+        .order("game_time")
+    )
+    if slate_date is not None:
+        query = query.eq("daily_boards.slate_date", slate_date.isoformat())
+    else:
+        query = query.lte("game_time", _iso(now.astimezone(UTC)))
+
+    rows = cast(list[dict[str, Any]], query.execute().data or [])
+    return [_board_pick_for_grading(row) for row in rows]
+
+
+def update_board_pick_grading_result(
+    supabase: Client,
+    *,
+    pick_id: int,
+    result_status: str,
+    actual_value: float | None,
+    graded_at: datetime | None,
+    grading_metadata: dict[str, Any],
+) -> None:
+    payload: dict[str, Any] = {
+        "result_status": result_status,
+        "actual_value": actual_value,
+        "graded_at": _optional_iso(graded_at),
+        "grading_metadata": grading_metadata,
+    }
+    supabase.table("board_picks").update(payload).eq("id", pick_id).execute()
 
 
 def create_model_run(
@@ -401,6 +448,29 @@ def _candidate_from_row(row: dict[str, Any]) -> PropCandidate:
     )
 
 
+def _board_pick_for_grading(row: dict[str, Any]) -> BoardPickForGrading:
+    board = row.get("daily_boards") or {}
+    snapshot_row = row.get("prop_snapshots") or {}
+    if not snapshot_row:
+        raise RepositoryError("Pending board pick has no prop snapshot.")
+
+    return BoardPickForGrading(
+        id=int(row["id"]),
+        board_id=int(row["board_id"]),
+        slate_date=_parse_date(board["slate_date"]),
+        rank=int(row["rank"]),
+        player_name=row["player_name"],
+        prop_type=row["prop_type"],
+        line=float(row["line"]),
+        side=row["side"],
+        game_time=_parse_optional_datetime(row.get("game_time")),
+        result_status=row["result_status"],
+        prop_snapshot_id=int(row["prop_snapshot_id"]),
+        grading_metadata=row.get("grading_metadata") or {},
+        snapshot=_candidate_from_row(snapshot_row),
+    )
+
+
 def _ingestion_run(row: dict[str, Any]) -> IngestionRun:
     return IngestionRun(
         id=row["id"],
@@ -458,6 +528,12 @@ def _parse_optional_datetime(value: str | datetime | None) -> datetime | None:
     if value is None:
         return None
     return _parse_datetime(value)
+
+
+def _parse_date(value: str | date) -> date:
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(value)
 
 
 def _safe_error_message(message: str) -> str:

@@ -10,7 +10,11 @@ from typing import Any
 import httpx
 from pydantic import ValidationError
 
-from app.propline_models import PropLineEvent, PropLineEventOdds
+from app.propline_models import (
+    PropLineEvent,
+    PropLineEventOdds,
+    PropLineEventStats,
+)
 from app.settings import Settings
 
 logger = logging.getLogger(__name__)
@@ -84,6 +88,21 @@ class PropLineClient:
         except ValidationError as exc:
             raise PropLineClientError(
                 f"PropLine endpoint {endpoint} returned invalid odds data.",
+                endpoint=endpoint,
+            ) from exc
+
+    def get_event_stats(
+        self,
+        sport_key: str,
+        event_id: str,
+    ) -> PropLineEventStats:
+        endpoint = f"/sports/{sport_key}/events/{event_id}/stats"
+        data = self._get(endpoint)
+        try:
+            return PropLineEventStats.model_validate(data)
+        except ValidationError as exc:
+            raise PropLineClientError(
+                f"PropLine endpoint {endpoint} returned invalid stats data.",
                 endpoint=endpoint,
             ) from exc
 

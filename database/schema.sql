@@ -115,6 +115,9 @@ create table if not exists public.board_picks (
     provider text,
     bookmaker_key text,
     metadata jsonb not null default '{}'::jsonb,
+    actual_value double precision,
+    graded_at timestamptz,
+    grading_metadata jsonb not null default '{}'::jsonb,
 
     unique (board_id, rank)
 );

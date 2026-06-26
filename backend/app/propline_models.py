@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PropLineOutcome(BaseModel):
@@ -50,6 +50,27 @@ class PropLineEvent(BaseModel):
 
 class PropLineEventOdds(PropLineEvent):
     bookmakers: list[PropLineBookmaker] = []
+
+
+class PropLineStatsPlayer(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    name: str | None = None
+    player_name: str | None = None
+    description: str | None = None
+    team: str | None = None
+    stats: dict[str, Any] | None = None
+    hits: float | int | str | None = None
+
+
+class PropLineEventStats(BaseModel):
+    model_config = ConfigDict(extra="allow")
+
+    id: str | None = None
+    sport_key: str | None = None
+    status: str | None = None
+    completed: bool | None = None
+    players: list[PropLineStatsPlayer] = Field(default_factory=list)
 
 
 def compact_raw_payload(

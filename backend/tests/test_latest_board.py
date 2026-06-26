@@ -72,6 +72,8 @@ def test_get_latest_board(monkeypatch: Any) -> None:
                 "model_probability": 0.712,
                 "game_time": "2026-06-17T01:44:23.937112+00:00",
                 "result_status": "pending",
+                "actual_value": None,
+                "graded_at": None,
             }
         ],
     )
@@ -86,6 +88,7 @@ def test_get_latest_board(monkeypatch: Any) -> None:
     assert data["status"] == "published"
     assert len(data["picks"]) == 1
     assert data["picks"][0]["player_name"] == "Test Player"
+    assert data["picks"][0]["actual_value"] is None
 
 
 def test_get_latest_board_returns_404_when_no_board(monkeypatch: Any) -> None:

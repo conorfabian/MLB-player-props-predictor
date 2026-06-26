@@ -14,6 +14,8 @@ class PickResponse(BaseModel):
     model_probability: float = Field(ge=0.0, le=1.0)
     game_time: datetime | None
     result_status: str
+    actual_value: float | None = None
+    graded_at: datetime | None = None
 
 
 class BoardResponse(BaseModel):

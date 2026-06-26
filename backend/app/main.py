@@ -7,6 +7,7 @@ from fastapi import FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.db import get_supabase
+from app.grading import GradingSummary, run_board_grading
 from app.pipeline import DailyBoardJobSummary, run_daily_board_job
 from app.schemas import BoardResponse, PickResponse
 from app.settings import get_api_settings
@@ -20,12 +21,13 @@ app = FastAPI(
 
 settings = get_api_settings()
 job_lock = Lock()
+grading_job_lock = Lock()
 
 app.add_middleware(
     CORSMiddleware,
     allow_origins=list(settings.frontend_origins),
     allow_credentials=False,
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
@@ -62,6 +64,30 @@ def run_daily_board_endpoint(
         job_lock.release()
 
 
+@app.post("/api/jobs/grade-board")
+def run_grade_board_endpoint(
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _require_cron_auth(authorization)
+    if not grading_job_lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail="Board grading job is already running.",
+        )
+
+    try:
+        summary = run_board_grading()
+        return _grading_summary(summary)
+    except Exception as exc:
+        logger.exception("Board grading cron job failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Board grading job failed.",
+        ) from exc
+    finally:
+        grading_job_lock.release()
+
+
 @app.get(
     "/api/boards/latest",
     response_model=BoardResponse,
@@ -96,7 +122,7 @@ def get_latest_board() -> BoardResponse:
         .select(
             "rank, player_name, team, opponent, "
             "prop_type, line, side, model_probability, "
-            "game_time, result_status"
+            "game_time, result_status, actual_value, graded_at"
         )
         .eq("board_id", board["id"])
         .order("rank")
@@ -162,4 +188,17 @@ def _daily_board_summary(summary: DailyBoardJobSummary) -> dict[str, Any]:
             "model_version": summary.board.model_version,
             "elapsed_seconds": round(summary.board.elapsed_seconds, 3),
         },
+    }
+
+
+def _grading_summary(summary: GradingSummary) -> dict[str, Any]:
+    return {
+        "status": "completed",
+        "graded": summary.graded,
+        "still_pending": summary.still_pending,
+        "hits": summary.hits,
+        "misses": summary.misses,
+        "pushes": summary.pushes,
+        "skipped": summary.skipped,
+        "elapsed_seconds": round(summary.elapsed_seconds, 3),
     }

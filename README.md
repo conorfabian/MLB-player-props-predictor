@@ -66,6 +66,7 @@ Current migration:
 
 ```text
 database/migrations/001_prop_ingestion_pipeline.sql
+database/migrations/002_board_grading.sql
 ```
 
 It adds:
@@ -76,6 +77,8 @@ It adds:
 - `candidate_predictions`
 - `publish_daily_board(...)` RPC for atomic board replacement
 - Nullable source metadata columns on existing board tables
+- Grading columns on `board_picks`: `actual_value`, `graded_at`, and
+  `grading_metadata`
 
 The full reproducible schema is mirrored in `database/schema.sql`.
 
@@ -117,6 +120,15 @@ cd backend
 ./.venv/bin/python -m jobs.generate_board --slate-date YYYY-MM-DD
 ```
 
+Results grading:
+
+```bash
+cd backend
+./.venv/bin/python -m jobs.grade_board --dry-run
+./.venv/bin/python -m jobs.grade_board
+./.venv/bin/python -m jobs.grade_board --slate-date YYYY-MM-DD
+```
+
 Scheduled daily board job:
 
 cron-job.org calls one authenticated backend endpoint. The endpoint runs
@@ -144,6 +156,33 @@ curl -X POST "$BACKEND_URL/api/jobs/daily-board" \
   -d '{}'
 ```
 
+Manual production grading endpoint verification:
+
+```bash
+BACKEND_URL=https://mlb-player-props-predictor.onrender.com
+curl -X POST "$BACKEND_URL/api/jobs/grade-board" \
+  -H "Authorization: Bearer $CRON_JOB_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+Scheduled grading job:
+
+Create a separate cron-job.org job after the daily board job.
+
+```text
+URL: https://mlb-player-props-predictor.onrender.com/api/jobs/grade-board
+Method: POST
+Header: Authorization: Bearer <CRON_JOB_SECRET>
+Header: Content-Type: application/json
+Body: {}
+Schedule: 05:00 America/New_York
+```
+
+Use the same `CRON_JOB_SECRET` value configured in Render. Keep it
+backend-only and never prefix it with `NEXT_PUBLIC_`. Enable failure
+notifications in cron-job.org if available.
+
 Local API:
 
 ```bash
@@ -167,6 +206,9 @@ Dry-run ingestion performs real PropLine fetching and normalization but does
 not write Supabase rows. Dry-run board generation reads stored snapshots,
 scores/ranks candidates, and prints the proposed board without creating model
 runs or replacing the current board.
+
+Dry-run grading reads pending board picks and PropLine event stats, then prints
+the summary it would apply without updating `board_picks`.
 
 Do not run the non-dry-run jobs against production until migrations are applied
 and dry runs/tests pass.

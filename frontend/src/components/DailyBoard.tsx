@@ -99,6 +99,13 @@ export function DailyBoard() {
                   {pick.side.toUpperCase()} {pick.line}{" "}
                   {pick.prop_type}
                 </p>
+
+                <p className="mt-2 text-sm text-gray-500">
+                  Result: {pick.result_status.toUpperCase()}
+                  {pick.actual_value !== null
+                    ? ` · Actual hits: ${pick.actual_value}`
+                    : ""}
+                </p>
               </div>
 
               <div className="text-right">

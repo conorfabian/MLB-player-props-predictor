@@ -6,6 +6,7 @@ from threading import Lock
 from fastapi.testclient import TestClient
 
 from app import main
+from app.grading import GradingSummary
 from app.pipeline import (
     BoardGenerationSummary,
     DailyBoardJobSummary,
@@ -145,4 +146,71 @@ def test_daily_board_job_returns_summary(monkeypatch) -> None:
             "model_version": "placeholder-v0",
             "elapsed_seconds": 2.346,
         },
+    }
+
+
+def test_grade_board_job_requires_auth(monkeypatch) -> None:
+    monkeypatch.setattr(main, "settings", _settings())
+    client = TestClient(main.app)
+
+    response = client.post("/api/jobs/grade-board")
+
+    assert response.status_code == 401
+
+
+def test_grade_board_job_rejects_overlapping_run(monkeypatch) -> None:
+    lock = Lock()
+    assert lock.acquire(blocking=False)
+    monkeypatch.setattr(main, "settings", _settings())
+    monkeypatch.setattr(main, "grading_job_lock", lock)
+    client = TestClient(main.app)
+
+    try:
+        response = client.post(
+            "/api/jobs/grade-board",
+            headers={"Authorization": "Bearer cron-secret"},
+        )
+    finally:
+        lock.release()
+
+    assert response.status_code == 409
+
+
+def test_grade_board_job_returns_summary(monkeypatch) -> None:
+    calls = 0
+
+    def fake_job() -> GradingSummary:
+        nonlocal calls
+        calls += 1
+        return GradingSummary(
+            graded=3,
+            still_pending=2,
+            hits=1,
+            misses=1,
+            pushes=1,
+            skipped=2,
+            elapsed_seconds=1.2345,
+        )
+
+    monkeypatch.setattr(main, "settings", _settings())
+    monkeypatch.setattr(main, "grading_job_lock", Lock())
+    monkeypatch.setattr(main, "run_board_grading", fake_job)
+    client = TestClient(main.app)
+
+    response = client.post(
+        "/api/jobs/grade-board",
+        headers={"Authorization": "Bearer cron-secret"},
+    )
+
+    assert response.status_code == 200
+    assert calls == 1
+    assert response.json() == {
+        "status": "completed",
+        "graded": 3,
+        "still_pending": 2,
+        "hits": 1,
+        "misses": 1,
+        "pushes": 1,
+        "skipped": 2,
+        "elapsed_seconds": 1.234,
     }

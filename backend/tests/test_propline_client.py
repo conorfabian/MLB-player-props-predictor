@@ -70,6 +70,33 @@ def test_client_uses_batter_hits_market_and_parses_optional_fields() -> None:
     assert odds.bookmakers[1].markets[0].outcomes[0].recorded_at is None
 
 
+def test_client_uses_event_stats_endpoint() -> None:
+    seen: list[httpx.Request] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "id": "evt-3",
+                "sport_key": "baseball_mlb",
+                "completed": True,
+                "players": [{"name": "Test Player", "stats": {"hits": 2}}],
+            },
+        )
+
+    client = PropLineClient(
+        settings(),
+        client=httpx.Client(transport=httpx.MockTransport(handler)),
+    )
+
+    stats = client.get_event_stats("baseball_mlb", "evt-3")
+
+    assert stats.id == "evt-3"
+    assert stats.completed is True
+    assert seen[0].url.path == "/v1/sports/baseball_mlb/events/evt-3/stats"
+
+
 def test_client_retries_transient_errors() -> None:
     attempts = 0
 
