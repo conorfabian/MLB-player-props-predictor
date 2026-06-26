@@ -1,19 +1,27 @@
 from __future__ import annotations
 
 import logging
-import re
-import unicodedata
 from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from time import perf_counter
-from typing import Any, cast
+from typing import Any
 
 from pydantic import ValidationError
 from supabase import Client
 
 from app.db import get_supabase
 from app.domain import BoardPickForGrading
+from app.player_stats import (
+    extra_value,
+    is_event_final,
+    iter_stats_players,
+    normalize_player_name,
+    numeric_int,
+    player_hits_from_stats,
+    player_name_from_stats,
+    stat_value,
+)
 from app.propline_client import PropLineClient, PropLineClientError
 from app.propline_models import PropLineEventStats, PropLineStatsPlayer
 from app.repositories import (
@@ -23,19 +31,6 @@ from app.repositories import (
 from app.settings import Settings, get_settings
 
 logger = logging.getLogger(__name__)
-
-FINAL_STATUSES = {"closed", "complete", "completed", "final", "finished"}
-NOT_FINAL_STATUSES = {
-    "created",
-    "delayed",
-    "in_progress",
-    "live",
-    "postponed",
-    "pre",
-    "scheduled",
-    "started",
-    "upcoming",
-}
 
 
 @dataclass(frozen=True)
@@ -153,31 +148,11 @@ def grade_prop_result(actual_value: float, line: float, side: str) -> str:
     raise ValueError(f"Unsupported prop side: {side}")
 
 
-def normalize_player_name(name: str) -> str:
-    normalized = unicodedata.normalize("NFKD", name)
-    ascii_name = normalized.encode("ascii", "ignore").decode("ascii")
-    return re.sub(r"[^a-z0-9]+", "", ascii_name.lower())
-
-
 def find_player_hits(
     stats_response: PropLineEventStats,
     player_name: str,
 ) -> int | None:
     return _find_player_hits_detail(stats_response, player_name)[0]
-
-
-def is_event_final(stats_response: PropLineEventStats) -> bool:
-    if stats_response.completed is True:
-        return True
-    if stats_response.completed is False:
-        return False
-
-    status = _event_status(stats_response)
-    if status in FINAL_STATUSES:
-        return True
-    if status in NOT_FINAL_STATUSES:
-        return False
-    return False
 
 
 def _grade_pick(
@@ -292,18 +267,7 @@ def _find_player_hits_detail(
 def _iter_players(
     stats_response: PropLineEventStats,
 ) -> Iterable[PropLineStatsPlayer]:
-    if stats_response.players:
-        yield from stats_response.players
-
-    for key in ("player_stats", "stats", "boxscore"):
-        value = _extra(stats_response, key)
-        if isinstance(value, list):
-            yield from _validate_players(value)
-        elif isinstance(value, dict):
-            for nested_key in ("players", "player_stats", "batters"):
-                nested = value.get(nested_key)
-                if isinstance(nested, list):
-                    yield from _validate_players(nested)
+    yield from iter_stats_players(stats_response)
 
 
 def _validate_players(values: list[Any]) -> Iterable[PropLineStatsPlayer]:
@@ -315,48 +279,19 @@ def _validate_players(values: list[Any]) -> Iterable[PropLineStatsPlayer]:
 
 
 def _player_name(player: PropLineStatsPlayer) -> str:
-    for value in (
-        player.name,
-        player.player_name,
-        player.description,
-        _extra(player, "full_name"),
-    ):
-        if isinstance(value, str) and value.strip():
-            return value.strip()
-    return ""
+    return player_name_from_stats(player)
 
 
 def _player_hits(player: PropLineStatsPlayer) -> int | None:
-    stat_type = _extra(player, "stat_type")
-    if isinstance(stat_type, str) and stat_type.strip().lower() in {
-        "h",
-        "hits",
-    }:
-        parsed = _numeric_int(_extra(player, "stat_value"))
-        if parsed is not None:
-            return parsed
-
-    for value in (
-        player.hits,
-        _extra(player, "hits"),
-        _extra(player, "h"),
-        _stat_value(player.stats, "hits"),
-        _stat_value(player.stats, "h"),
-        _stat_value(cast(dict[str, Any] | None, _extra(player, "batting")), "h"),
-        _stat_value(cast(dict[str, Any] | None, _extra(player, "batting")), "hits"),
-    ):
-        parsed = _numeric_int(value)
-        if parsed is not None:
-            return parsed
-    return None
+    return player_hits_from_stats(player)
 
 
 def _event_status(stats_response: PropLineEventStats) -> str:
     for value in (
         stats_response.status,
-        _extra(stats_response, "event_status"),
-        _extra(stats_response, "game_status"),
-        _extra(stats_response, "status_detail"),
+        extra_value(stats_response, "event_status"),
+        extra_value(stats_response, "game_status"),
+        extra_value(stats_response, "status_detail"),
     ):
         if isinstance(value, str):
             return value.strip().lower()
@@ -364,25 +299,12 @@ def _event_status(stats_response: PropLineEventStats) -> str:
 
 
 def _stat_value(stats: dict[str, Any] | None, key: str) -> Any:
-    if not stats:
-        return None
-    return stats.get(key)
+    return stat_value(stats, key)
 
 
 def _numeric_int(value: Any) -> int | None:
-    if value is None:
-        return None
-    if isinstance(value, bool):
-        return None
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    if parsed < 0:
-        return None
-    return int(parsed)
+    return numeric_int(value)
 
 
 def _extra(model: Any, key: str) -> Any:
-    extra = getattr(model, "model_extra", None) or {}
-    return extra.get(key)
+    return extra_value(model, key)

@@ -67,6 +67,7 @@ Current migration:
 ```text
 database/migrations/001_prop_ingestion_pipeline.sql
 database/migrations/002_board_grading.sql
+database/migrations/003_player_game_batting.sql
 ```
 
 It adds:
@@ -79,6 +80,7 @@ It adds:
 - Nullable source metadata columns on existing board tables
 - Grading columns on `board_picks`: `actual_value`, `graded_at`, and
   `grading_metadata`
+- `player_game_batting` for normalized completed player-game batting stats
 
 The full reproducible schema is mirrored in `database/schema.sql`.
 
@@ -91,6 +93,7 @@ select * from public.model_runs order by started_at desc limit 10;
 select * from public.candidate_predictions order by created_at desc limit 20;
 select * from public.daily_boards order by slate_date desc limit 5;
 select * from public.board_picks order by board_id desc, rank asc limit 20;
+select * from public.player_game_batting order by game_date desc limit 20;
 ```
 
 ## Commands
@@ -129,6 +132,20 @@ cd backend
 ./.venv/bin/python -m jobs.grade_board --slate-date YYYY-MM-DD
 ```
 
+Player-game batting stats backfill:
+
+```bash
+cd backend
+./.venv/bin/python -m jobs.backfill_player_game_batting --dry-run
+./.venv/bin/python -m jobs.backfill_player_game_batting
+./.venv/bin/python -m jobs.backfill_player_game_batting --slate-date YYYY-MM-DD
+./.venv/bin/python -m jobs.backfill_player_game_batting --start-date YYYY-MM-DD --end-date YYYY-MM-DD
+./.venv/bin/python -m jobs.backfill_player_game_batting --limit-events 5
+```
+
+Apply `database/migrations/003_player_game_batting.sql` before running the
+non-dry-run player-game batting backfill.
+
 Scheduled daily board job:
 
 cron-job.org calls one authenticated backend endpoint. The endpoint runs
@@ -166,6 +183,21 @@ curl -X POST "$BACKEND_URL/api/jobs/grade-board" \
   -d '{}'
 ```
 
+Manual production player-game batting backfill endpoint verification:
+
+```bash
+BACKEND_URL=https://mlb-player-props-predictor.onrender.com
+curl -X POST "$BACKEND_URL/api/jobs/backfill-player-game-batting" \
+  -H "Authorization: Bearer $CRON_JOB_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{}'
+```
+
+An empty `{}` body uses the backend's safe recent default window: yesterday
+through today in `SLATE_TIMEZONE`, capped at 50 events. For a targeted manual
+endpoint run, include `slate_date`, or `start_date` and `end_date`, plus an
+optional `limit_events` value up to 100.
+
 Scheduled grading job:
 
 Create a separate cron-job.org job after the daily board job.
@@ -182,6 +214,28 @@ Schedule: 05:00 America/New_York
 Use the same `CRON_JOB_SECRET` value configured in Render. Keep it
 backend-only and never prefix it with `NEXT_PUBLIC_`. Enable failure
 notifications in cron-job.org if available.
+
+Scheduled player-game batting stats backfill:
+
+Create a separate cron-job.org job after the grading job. Keep the body as
+`{}` for the daily schedule; the backend resolves that to the safe recent
+bounded window instead of reprocessing all historical snapshots.
+
+```text
+URL: https://mlb-player-props-predictor.onrender.com/api/jobs/backfill-player-game-batting
+Method: POST
+Header: Authorization: Bearer <CRON_JOB_SECRET>
+Header: Content-Type: application/json
+Body: {}
+Schedule: 05:30 America/New_York
+```
+
+Use the same backend-only `CRON_JOB_SECRET` value configured in Render. Keep it
+backend-only and never prefix it with `NEXT_PUBLIC_`. Enable failure
+notifications in cron-job.org if available.
+
+Run historical player-game batting backfills manually from the CLI with
+explicit `--slate-date` or `--start-date`/`--end-date` flags.
 
 Local API:
 
@@ -209,6 +263,10 @@ runs or replacing the current board.
 
 Dry-run grading reads pending board picks and PropLine event stats, then prints
 the summary it would apply without updating `board_picks`.
+
+Dry-run player-game batting backfill reads stored PropLine snapshot events,
+fetches event stats, parses completed player-game batting rows, and prints the
+summary without writing `player_game_batting`.
 
 Do not run the non-dry-run jobs against production until migrations are applied
 and dry runs/tests pass.

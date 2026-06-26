@@ -12,6 +12,7 @@ from app.pipeline import (
     DailyBoardJobSummary,
     IngestionSummary,
 )
+from app.player_game_batting import PlayerGameBattingBackfillSummary
 from app.settings import Settings
 
 
@@ -51,6 +52,18 @@ def _summary() -> DailyBoardJobSummary:
             elapsed_seconds=2.3456,
             top_picks=[],
         ),
+    )
+
+
+def _player_game_batting_summary() -> PlayerGameBattingBackfillSummary:
+    return PlayerGameBattingBackfillSummary(
+        events_found=4,
+        events_processed=3,
+        player_rows_parsed=27,
+        player_rows_upserted=27,
+        skipped_events=1,
+        skipped_players=2,
+        elapsed_seconds=1.2345,
     )
 
 
@@ -214,3 +227,236 @@ def test_grade_board_job_returns_summary(monkeypatch) -> None:
         "skipped": 2,
         "elapsed_seconds": 1.234,
     }
+
+
+def test_backfill_player_game_batting_requires_auth(monkeypatch) -> None:
+    monkeypatch.setattr(main, "settings", _settings())
+    client = TestClient(main.app)
+
+    response = client.post("/api/jobs/backfill-player-game-batting")
+
+    assert response.status_code == 401
+
+
+def test_backfill_player_game_batting_rejects_wrong_auth(monkeypatch) -> None:
+    monkeypatch.setattr(main, "settings", _settings())
+    client = TestClient(main.app)
+
+    response = client.post(
+        "/api/jobs/backfill-player-game-batting",
+        headers={"Authorization": "Bearer wrong-secret"},
+    )
+
+    assert response.status_code == 401
+
+
+def test_backfill_player_game_batting_rejects_overlapping_run(
+    monkeypatch,
+) -> None:
+    lock = Lock()
+    assert lock.acquire(blocking=False)
+    monkeypatch.setattr(main, "settings", _settings())
+    monkeypatch.setattr(main, "player_game_batting_job_lock", lock)
+    client = TestClient(main.app)
+
+    try:
+        response = client.post(
+            "/api/jobs/backfill-player-game-batting",
+            headers={"Authorization": "Bearer cron-secret"},
+        )
+    finally:
+        lock.release()
+
+    assert response.status_code == 409
+
+
+def test_backfill_player_game_batting_empty_body_uses_default_window(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_job(**kwargs: object) -> PlayerGameBattingBackfillSummary:
+        calls.append(kwargs)
+        return _player_game_batting_summary()
+
+    monkeypatch.setattr(main, "settings", _settings())
+    monkeypatch.setattr(main, "player_game_batting_job_lock", Lock())
+    monkeypatch.setattr(main, "run_player_game_batting_backfill", fake_job)
+    monkeypatch.setattr(
+        main,
+        "_current_slate_date",
+        lambda: date(2026, 6, 26),
+    )
+    client = TestClient(main.app)
+
+    response = client.post(
+        "/api/jobs/backfill-player-game-batting",
+        headers={"Authorization": "Bearer cron-secret"},
+        json={},
+    )
+
+    assert response.status_code == 200
+    assert calls == [
+        {
+            "dry_run": False,
+            "slate_date": None,
+            "start_date": date(2026, 6, 25),
+            "end_date": date(2026, 6, 26),
+            "limit_events": 50,
+        }
+    ]
+    assert response.json() == {
+        "status": "completed",
+        "resolved_window": {
+            "slate_date": None,
+            "start_date": "2026-06-25",
+            "end_date": "2026-06-26",
+            "limit_events": 50,
+            "dry_run": False,
+        },
+        "events_found": 4,
+        "events_processed": 3,
+        "player_rows_parsed": 27,
+        "player_rows_upserted": 27,
+        "skipped_events": 1,
+        "skipped_players": 2,
+        "elapsed_seconds": 1.234,
+    }
+
+
+def test_backfill_player_game_batting_passes_explicit_slate_date(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_job(**kwargs: object) -> PlayerGameBattingBackfillSummary:
+        calls.append(kwargs)
+        return _player_game_batting_summary()
+
+    monkeypatch.setattr(main, "settings", _settings())
+    monkeypatch.setattr(main, "player_game_batting_job_lock", Lock())
+    monkeypatch.setattr(main, "run_player_game_batting_backfill", fake_job)
+    client = TestClient(main.app)
+
+    response = client.post(
+        "/api/jobs/backfill-player-game-batting",
+        headers={"Authorization": "Bearer cron-secret"},
+        json={
+            "slate_date": "2026-06-24",
+            "limit_events": 12,
+            "dry_run": True,
+        },
+    )
+
+    assert response.status_code == 200
+    assert calls == [
+        {
+            "dry_run": True,
+            "slate_date": date(2026, 6, 24),
+            "start_date": None,
+            "end_date": None,
+            "limit_events": 12,
+        }
+    ]
+    assert response.json()["resolved_window"] == {
+        "slate_date": "2026-06-24",
+        "start_date": None,
+        "end_date": None,
+        "limit_events": 12,
+        "dry_run": True,
+    }
+
+
+def test_backfill_player_game_batting_passes_explicit_date_range(
+    monkeypatch,
+) -> None:
+    calls: list[dict[str, object]] = []
+
+    def fake_job(**kwargs: object) -> PlayerGameBattingBackfillSummary:
+        calls.append(kwargs)
+        return _player_game_batting_summary()
+
+    monkeypatch.setattr(main, "settings", _settings())
+    monkeypatch.setattr(main, "player_game_batting_job_lock", Lock())
+    monkeypatch.setattr(main, "run_player_game_batting_backfill", fake_job)
+    client = TestClient(main.app)
+
+    response = client.post(
+        "/api/jobs/backfill-player-game-batting",
+        headers={"Authorization": "Bearer cron-secret"},
+        json={
+            "start_date": "2026-06-20",
+            "end_date": "2026-06-22",
+            "limit_events": 100,
+        },
+    )
+
+    assert response.status_code == 200
+    assert calls == [
+        {
+            "dry_run": False,
+            "slate_date": None,
+            "start_date": date(2026, 6, 20),
+            "end_date": date(2026, 6, 22),
+            "limit_events": 100,
+        }
+    ]
+    assert response.json()["resolved_window"] == {
+        "slate_date": None,
+        "start_date": "2026-06-20",
+        "end_date": "2026-06-22",
+        "limit_events": 100,
+        "dry_run": False,
+    }
+
+
+def test_backfill_player_game_batting_rejects_invalid_date_combination(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(main, "settings", _settings())
+    client = TestClient(main.app)
+
+    response = client.post(
+        "/api/jobs/backfill-player-game-batting",
+        headers={"Authorization": "Bearer cron-secret"},
+        json={
+            "slate_date": "2026-06-24",
+            "start_date": "2026-06-20",
+            "end_date": "2026-06-22",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_backfill_player_game_batting_rejects_invalid_range_order(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(main, "settings", _settings())
+    client = TestClient(main.app)
+
+    response = client.post(
+        "/api/jobs/backfill-player-game-batting",
+        headers={"Authorization": "Bearer cron-secret"},
+        json={
+            "start_date": "2026-06-22",
+            "end_date": "2026-06-20",
+        },
+    )
+
+    assert response.status_code == 422
+
+
+def test_backfill_player_game_batting_rejects_limit_above_cap(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(main, "settings", _settings())
+    client = TestClient(main.app)
+
+    response = client.post(
+        "/api/jobs/backfill-player-game-batting",
+        headers={"Authorization": "Bearer cron-secret"},
+        json={"limit_events": 101},
+    )
+
+    assert response.status_code == 422

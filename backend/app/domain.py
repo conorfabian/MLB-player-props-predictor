@@ -118,3 +118,40 @@ class BoardPickForGrading:
     prop_snapshot_id: int
     grading_metadata: dict[str, Any]
     snapshot: PropCandidate
+
+
+@dataclass(frozen=True)
+class PlayerGameEventContext:
+    provider: str
+    provider_event_id: str
+    sport_key: str
+    game_date: date
+    commence_time: datetime
+    home_team: str | None
+    away_team: str | None
+
+
+@dataclass(frozen=True)
+class PlayerGameBatting:
+    provider: str
+    provider_event_id: str
+    sport_key: str
+    game_date: date
+    commence_time: datetime | None
+    home_team: str | None
+    away_team: str | None
+    player_name: str
+    normalized_player_name: str
+    team: str | None
+    opponent: str | None
+    is_home: bool | None
+    hits: int | None
+    at_bats: int | None
+    plate_appearances: int | None
+    walks: int | None
+    strikeouts: int | None
+    total_bases: int | None
+    rbis: int | None
+    runs: int | None
+    home_runs: int | None
+    raw_payload: dict[str, Any]

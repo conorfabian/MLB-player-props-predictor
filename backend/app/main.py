@@ -1,18 +1,28 @@
 import logging
 import secrets
+from dataclasses import dataclass
+from datetime import UTC, date, datetime, timedelta
 from threading import Lock
 from typing import Any, cast
 
-from fastapi import FastAPI, Header, HTTPException
+from fastapi import Body, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.db import get_supabase
 from app.grading import GradingSummary, run_board_grading
 from app.pipeline import DailyBoardJobSummary, run_daily_board_job
+from app.player_game_batting import (
+    PlayerGameBattingBackfillSummary,
+    run_player_game_batting_backfill,
+)
 from app.schemas import BoardResponse, PickResponse
 from app.settings import get_api_settings
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_PLAYER_GAME_BATTING_LIMIT_EVENTS = 50
+MAX_PLAYER_GAME_BATTING_LIMIT_EVENTS = 100
 
 app = FastAPI(
     title="MLB Props Predictor API",
@@ -22,6 +32,50 @@ app = FastAPI(
 settings = get_api_settings()
 job_lock = Lock()
 grading_job_lock = Lock()
+player_game_batting_job_lock = Lock()
+
+
+class PlayerGameBattingBackfillRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    slate_date: date | None = None
+    start_date: date | None = None
+    end_date: date | None = None
+    limit_events: int | None = Field(
+        default=None,
+        gt=0,
+        le=MAX_PLAYER_GAME_BATTING_LIMIT_EVENTS,
+    )
+    dry_run: bool = False
+
+    @model_validator(mode="after")
+    def validate_date_window(self) -> "PlayerGameBattingBackfillRequest":
+        has_range = self.start_date is not None or self.end_date is not None
+        if self.slate_date is not None and has_range:
+            raise ValueError(
+                "slate_date cannot be combined with start_date or end_date."
+            )
+        if (self.start_date is None) != (self.end_date is None):
+            raise ValueError(
+                "start_date and end_date must be provided together."
+            )
+        if (
+            self.start_date is not None
+            and self.end_date is not None
+            and self.start_date > self.end_date
+        ):
+            raise ValueError("start_date must be before or equal to end_date.")
+        return self
+
+
+@dataclass(frozen=True)
+class ResolvedPlayerGameBattingBackfillRequest:
+    slate_date: date | None
+    start_date: date | None
+    end_date: date | None
+    limit_events: int
+    dry_run: bool
+
 
 app.add_middleware(
     CORSMiddleware,
@@ -86,6 +140,38 @@ def run_grade_board_endpoint(
         ) from exc
     finally:
         grading_job_lock.release()
+
+
+@app.post("/api/jobs/backfill-player-game-batting")
+def run_backfill_player_game_batting_endpoint(
+    request: PlayerGameBattingBackfillRequest | None = Body(default=None),
+    authorization: str | None = Header(default=None),
+) -> dict[str, Any]:
+    _require_cron_auth(authorization)
+    resolved_request = _resolve_player_game_batting_backfill_request(request)
+    if not player_game_batting_job_lock.acquire(blocking=False):
+        raise HTTPException(
+            status_code=409,
+            detail="Player-game batting backfill job is already running.",
+        )
+
+    try:
+        summary = run_player_game_batting_backfill(
+            dry_run=resolved_request.dry_run,
+            slate_date=resolved_request.slate_date,
+            start_date=resolved_request.start_date,
+            end_date=resolved_request.end_date,
+            limit_events=resolved_request.limit_events,
+        )
+        return _player_game_batting_summary(summary, resolved_request)
+    except Exception as exc:
+        logger.exception("Player-game batting backfill cron job failed")
+        raise HTTPException(
+            status_code=500,
+            detail="Player-game batting backfill job failed.",
+        ) from exc
+    finally:
+        player_game_batting_job_lock.release()
 
 
 @app.get(
@@ -202,3 +288,78 @@ def _grading_summary(summary: GradingSummary) -> dict[str, Any]:
         "skipped": summary.skipped,
         "elapsed_seconds": round(summary.elapsed_seconds, 3),
     }
+
+
+def _resolve_player_game_batting_backfill_request(
+    request: PlayerGameBattingBackfillRequest | None,
+) -> ResolvedPlayerGameBattingBackfillRequest:
+    request = request or PlayerGameBattingBackfillRequest()
+    limit_events = (
+        request.limit_events
+        if request.limit_events is not None
+        else DEFAULT_PLAYER_GAME_BATTING_LIMIT_EVENTS
+    )
+
+    if request.slate_date is not None:
+        return ResolvedPlayerGameBattingBackfillRequest(
+            slate_date=request.slate_date,
+            start_date=None,
+            end_date=None,
+            limit_events=limit_events,
+            dry_run=request.dry_run,
+        )
+
+    if request.start_date is not None and request.end_date is not None:
+        return ResolvedPlayerGameBattingBackfillRequest(
+            slate_date=None,
+            start_date=request.start_date,
+            end_date=request.end_date,
+            limit_events=limit_events,
+            dry_run=request.dry_run,
+        )
+
+    today = _current_slate_date()
+    return ResolvedPlayerGameBattingBackfillRequest(
+        slate_date=None,
+        start_date=today - timedelta(days=1),
+        end_date=today,
+        limit_events=limit_events,
+        dry_run=request.dry_run,
+    )
+
+
+def _current_slate_date() -> date:
+    return datetime.now(UTC).astimezone(settings.slate_zoneinfo).date()
+
+
+def _player_game_batting_summary(
+    summary: PlayerGameBattingBackfillSummary,
+    resolved_request: ResolvedPlayerGameBattingBackfillRequest,
+) -> dict[str, Any]:
+    return {
+        "status": "completed",
+        "resolved_window": {
+            "slate_date": _optional_date_string(
+                resolved_request.slate_date,
+            ),
+            "start_date": _optional_date_string(
+                resolved_request.start_date,
+            ),
+            "end_date": _optional_date_string(resolved_request.end_date),
+            "limit_events": resolved_request.limit_events,
+            "dry_run": resolved_request.dry_run,
+        },
+        "events_found": summary.events_found,
+        "events_processed": summary.events_processed,
+        "player_rows_parsed": summary.player_rows_parsed,
+        "player_rows_upserted": summary.player_rows_upserted,
+        "skipped_events": summary.skipped_events,
+        "skipped_players": summary.skipped_players,
+        "elapsed_seconds": round(summary.elapsed_seconds, 3),
+    }
+
+
+def _optional_date_string(value: date | None) -> str | None:
+    if value is None:
+        return None
+    return value.isoformat()

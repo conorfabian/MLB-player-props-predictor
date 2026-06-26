@@ -12,6 +12,8 @@ from app.domain import (
     BoardPickForGrading,
     IngestionRun,
     ModelRun,
+    PlayerGameBatting,
+    PlayerGameEventContext,
     PropCandidate,
     ScoredCandidate,
 )
@@ -240,6 +242,72 @@ def update_board_pick_grading_result(
     supabase.table("board_picks").update(payload).eq("id", pick_id).execute()
 
 
+def get_events_for_player_stats_backfill(
+    supabase: Client,
+    *,
+    now: datetime,
+    start_commence_time: datetime | None = None,
+    end_commence_time: datetime | None = None,
+    limit_events: int | None = None,
+) -> list[PlayerGameEventContext]:
+    query = (
+        supabase.table("prop_snapshots")
+        .select(
+            "provider, provider_event_id, sport_key, commence_time, "
+            "home_team, away_team"
+        )
+        .eq("provider", "propline")
+        .eq("sport_key", "baseball_mlb")
+        .eq("bookmaker_key", "prizepicks")
+        .eq("market_key", "batter_hits")
+        .eq("outcome_name", "over")
+        .lte("commence_time", _iso(now.astimezone(UTC)))
+        .order("commence_time")
+    )
+    if start_commence_time is not None:
+        query = query.gte(
+            "commence_time",
+            _iso(start_commence_time.astimezone(UTC)),
+        )
+    if end_commence_time is not None:
+        query = query.lt(
+            "commence_time",
+            _iso(end_commence_time.astimezone(UTC)),
+        )
+    if limit_events is not None:
+        query = query.limit(limit_events * 100)
+
+    rows = cast(list[dict[str, Any]], query.execute().data or [])
+    events = _dedupe_player_stats_events(rows)
+    if limit_events is not None:
+        return events[:limit_events]
+    return events
+
+
+def upsert_player_game_batting_rows(
+    supabase: Client,
+    *,
+    rows: Sequence[PlayerGameBatting],
+    batch_size: int = 250,
+) -> int:
+    payloads = [_player_game_batting_to_row(row) for row in rows]
+    upserted = 0
+    for start in range(0, len(payloads), batch_size):
+        batch = payloads[start : start + batch_size]
+        (
+            supabase.table("player_game_batting")
+            .upsert(
+                cast(Any, batch),
+                on_conflict=(
+                    "provider,provider_event_id,normalized_player_name"
+                ),
+            )
+            .execute()
+        )
+        upserted += len(batch)
+    return upserted
+
+
 def create_model_run(
     supabase: Client,
     *,
@@ -415,6 +483,63 @@ def _candidate_to_row(
         "captured_at": _iso(candidate.captured_at),
         "raw_payload": candidate.raw_payload,
     }
+
+
+def _player_game_batting_to_row(row: PlayerGameBatting) -> dict[str, Any]:
+    return {
+        "provider": row.provider,
+        "provider_event_id": row.provider_event_id,
+        "sport_key": row.sport_key,
+        "game_date": row.game_date.isoformat(),
+        "commence_time": _optional_iso(row.commence_time),
+        "home_team": row.home_team,
+        "away_team": row.away_team,
+        "player_name": row.player_name,
+        "normalized_player_name": row.normalized_player_name,
+        "team": row.team,
+        "opponent": row.opponent,
+        "is_home": row.is_home,
+        "hits": row.hits,
+        "at_bats": row.at_bats,
+        "plate_appearances": row.plate_appearances,
+        "walks": row.walks,
+        "strikeouts": row.strikeouts,
+        "total_bases": row.total_bases,
+        "rbis": row.rbis,
+        "runs": row.runs,
+        "home_runs": row.home_runs,
+        "raw_payload": row.raw_payload,
+        "updated_at": _iso(datetime.now(UTC)),
+    }
+
+
+def _dedupe_player_stats_events(
+    rows: list[dict[str, Any]],
+) -> list[PlayerGameEventContext]:
+    events: list[PlayerGameEventContext] = []
+    seen: set[tuple[str, str, str]] = set()
+    for row in rows:
+        key = (
+            row["provider"],
+            row["sport_key"],
+            row["provider_event_id"],
+        )
+        if key in seen:
+            continue
+        seen.add(key)
+        commence_time = _parse_datetime(row["commence_time"])
+        events.append(
+            PlayerGameEventContext(
+                provider=row["provider"],
+                provider_event_id=row["provider_event_id"],
+                sport_key=row["sport_key"],
+                game_date=commence_time.date(),
+                commence_time=commence_time,
+                home_team=row.get("home_team"),
+                away_team=row.get("away_team"),
+            )
+        )
+    return events
 
 
 def _candidate_from_row(row: dict[str, Any]) -> PropCandidate:

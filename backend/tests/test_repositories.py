@@ -1,11 +1,15 @@
 from __future__ import annotations
 
+from datetime import UTC, date, datetime
 from typing import Any
 
+from app.domain import PlayerGameBatting
 from app.repositories import (
+    get_events_for_player_stats_backfill,
     get_completed_ingestion_runs,
     insert_candidate_predictions,
     publish_daily_board,
+    upsert_player_game_batting_rows,
 )
 from jobs.generate_board import board_draft_from_ranked
 from tests.fixtures import candidate
@@ -21,15 +25,31 @@ class FakeTable:
         self.inserted: list[Any] = []
         self.data = data or []
         self.limit_value: int | None = None
+        self.upserted: list[Any] = []
+        self.on_conflict: str | None = None
 
     def insert(self, payload: Any) -> "FakeTable":
         self.inserted.append(payload)
+        return self
+
+    def upsert(self, payload: Any, *, on_conflict: str) -> "FakeTable":
+        self.upserted.append(payload)
+        self.on_conflict = on_conflict
         return self
 
     def select(self, *_args: Any, **_kwargs: Any) -> "FakeTable":
         return self
 
     def eq(self, *_args: Any, **_kwargs: Any) -> "FakeTable":
+        return self
+
+    def lte(self, *_args: Any, **_kwargs: Any) -> "FakeTable":
+        return self
+
+    def gte(self, *_args: Any, **_kwargs: Any) -> "FakeTable":
+        return self
+
+    def lt(self, *_args: Any, **_kwargs: Any) -> "FakeTable":
         return self
 
     def order(self, *_args: Any, **_kwargs: Any) -> "FakeTable":
@@ -141,3 +161,79 @@ def test_get_completed_ingestion_runs_defaults_to_no_limit() -> None:
 
     assert len(runs) == 1
     assert fake.tables["prop_ingestion_runs"].limit_value is None
+
+
+def test_get_events_for_player_stats_backfill_dedupes_events() -> None:
+    fake = FakeSupabase()
+    fake.tables["prop_snapshots"] = FakeTable(
+        [
+            {
+                "provider": "propline",
+                "provider_event_id": "evt-1",
+                "sport_key": "baseball_mlb",
+                "commence_time": "2026-06-16T23:00:00+00:00",
+                "home_team": "New York Yankees",
+                "away_team": "Boston Red Sox",
+            },
+            {
+                "provider": "propline",
+                "provider_event_id": "evt-1",
+                "sport_key": "baseball_mlb",
+                "commence_time": "2026-06-16T23:00:00+00:00",
+                "home_team": "New York Yankees",
+                "away_team": "Boston Red Sox",
+            },
+        ]
+    )
+
+    events = get_events_for_player_stats_backfill(
+        fake,  # type: ignore[arg-type]
+        now=datetime(2026, 6, 17, tzinfo=UTC),
+    )
+
+    assert len(events) == 1
+    assert events[0].provider_event_id == "evt-1"
+
+
+def test_upsert_player_game_batting_rows_uses_idempotency_key() -> None:
+    fake = FakeSupabase()
+    row = PlayerGameBatting(
+        provider="propline",
+        provider_event_id="evt-1",
+        sport_key="baseball_mlb",
+        game_date=date(2026, 6, 16),
+        commence_time=datetime(2026, 6, 16, 23, 0, tzinfo=UTC),
+        home_team="New York Yankees",
+        away_team="Boston Red Sox",
+        player_name="Jose Ramirez",
+        normalized_player_name="joseramirez",
+        team="New York Yankees",
+        opponent="Boston Red Sox",
+        is_home=True,
+        hits=None,
+        at_bats=3,
+        plate_appearances=None,
+        walks=None,
+        strikeouts=None,
+        total_bases=None,
+        rbis=None,
+        runs=None,
+        home_runs=None,
+        raw_payload={"fixture": True},
+    )
+
+    upserted = upsert_player_game_batting_rows(
+        fake,  # type: ignore[arg-type]
+        rows=[row],
+    )
+
+    table = fake.tables["player_game_batting"]
+    payload = table.upserted[0][0]
+    assert upserted == 1
+    assert table.on_conflict == (
+        "provider,provider_event_id,normalized_player_name"
+    )
+    assert payload["provider_event_id"] == "evt-1"
+    assert payload["normalized_player_name"] == "joseramirez"
+    assert payload["hits"] is None
+    assert payload["at_bats"] == 3
