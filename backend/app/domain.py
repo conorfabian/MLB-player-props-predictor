@@ -155,3 +155,63 @@ class PlayerGameBatting:
     runs: int | None
     home_runs: int | None
     raw_payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class BatterHitsFeatureRow:
+    prior_games_3: int
+    prior_games_5: int
+    prior_games_10: int
+    hits_last_3: int
+    hits_last_5: int
+    hits_last_10: int
+    hit_rate_last_3: float | None
+    hit_rate_last_5: float | None
+    hit_rate_last_10: float | None
+    avg_hits_last_10: float | None
+    avg_at_bats_last_10: float | None
+    avg_plate_appearances_last_10: float | None
+    avg_total_bases_last_10: float | None
+    strikeout_rate_last_10: float | None
+    walk_rate_last_10: float | None
+    season_games_before: int
+    season_hits_before: int
+    season_hit_rate_before: float | None
+    season_avg_hits_before: float | None
+    has_prior_batting_history: bool
+    is_cold_start: bool
+
+
+@dataclass(frozen=True)
+class BatterHitsTrainingExample:
+    prop_snapshot_id: int
+    provider: str
+    provider_event_id: str
+    sport_key: str
+    bookmaker_key: str
+    market_key: str
+    player_name: str
+    normalized_player_name: str
+    game_date: date
+    commence_time: datetime | None
+    home_team: str | None
+    away_team: str | None
+    line: float
+    side: str
+    actual_hits: int
+    target_over: bool
+    feature_version: str
+    features: BatterHitsFeatureRow
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class FeatureBuildSummary:
+    candidates_found: int
+    candidates_deduped: int
+    examples_built: int
+    examples_upserted: int
+    skipped_missing_label: int
+    skipped_missing_history: int
+    skipped_unsupported_side: int
+    elapsed_seconds: float

@@ -8,6 +8,7 @@ from uuid import uuid4
 from supabase import Client
 
 from app.domain import (
+    BatterHitsTrainingExample,
     BoardDraft,
     BoardPickForGrading,
     IngestionRun,
@@ -308,6 +309,121 @@ def upsert_player_game_batting_rows(
     return upserted
 
 
+def get_candidate_prop_snapshots_for_training(
+    supabase: Client,
+    *,
+    now: datetime,
+    start_commence_time: datetime | None = None,
+    end_commence_time: datetime | None = None,
+    limit: int | None = None,
+) -> list[PropCandidate]:
+    query = (
+        supabase.table("prop_snapshots")
+        .select("*")
+        .eq("provider", "propline")
+        .eq("sport_key", "baseball_mlb")
+        .eq("bookmaker_key", "prizepicks")
+        .eq("market_key", "batter_hits")
+        .eq("outcome_name", "over")
+        .lte("commence_time", _iso(now.astimezone(UTC)))
+        .order("commence_time")
+        .order("captured_at")
+    )
+    if start_commence_time is not None:
+        query = query.gte(
+            "commence_time",
+            _iso(start_commence_time.astimezone(UTC)),
+        )
+    if end_commence_time is not None:
+        query = query.lt(
+            "commence_time",
+            _iso(end_commence_time.astimezone(UTC)),
+        )
+    if limit is not None:
+        query = query.limit(limit)
+
+    rows = cast(list[dict[str, Any]], query.execute().data or [])
+    return [_candidate_from_row(row) for row in rows]
+
+
+def get_player_game_batting_for_event(
+    supabase: Client,
+    *,
+    provider: str,
+    provider_event_id: str,
+    normalized_player_name: str,
+) -> PlayerGameBatting | None:
+    rows = cast(
+        list[dict[str, Any]],
+        supabase.table("player_game_batting")
+        .select("*")
+        .eq("provider", provider)
+        .eq("provider_event_id", provider_event_id)
+        .eq("normalized_player_name", normalized_player_name)
+        .limit(1)
+        .execute()
+        .data
+        or [],
+    )
+    if not rows:
+        return None
+    return _player_game_batting_from_row(rows[0])
+
+
+def get_prior_player_game_batting(
+    supabase: Client,
+    *,
+    provider: str,
+    sport_key: str,
+    normalized_player_name: str,
+    before_game_date: date,
+) -> list[PlayerGameBatting]:
+    rows = cast(
+        list[dict[str, Any]],
+        supabase.table("player_game_batting")
+        .select("*")
+        .eq("provider", provider)
+        .eq("sport_key", sport_key)
+        .eq("normalized_player_name", normalized_player_name)
+        .lt("game_date", before_game_date.isoformat())
+        .order("game_date", desc=True)
+        .order("commence_time", desc=True)
+        .execute()
+        .data
+        or [],
+    )
+    return [
+        row
+        for row in (_player_game_batting_from_row(item) for item in rows)
+        if row.hits is not None
+    ]
+
+
+def upsert_batter_hits_training_examples(
+    supabase: Client,
+    *,
+    rows: Sequence[BatterHitsTrainingExample],
+    batch_size: int = 250,
+) -> int:
+    payloads = [_batter_hits_training_example_to_row(row) for row in rows]
+    upserted = 0
+    for start in range(0, len(payloads), batch_size):
+        batch = payloads[start : start + batch_size]
+        (
+            supabase.table("batter_hits_training_examples")
+            .upsert(
+                cast(Any, batch),
+                on_conflict=(
+                    "provider,provider_event_id,normalized_player_name,"
+                    "sport_key,market_key,bookmaker_key,line,side"
+                ),
+            )
+            .execute()
+        )
+        upserted += len(batch)
+    return upserted
+
+
 def create_model_run(
     supabase: Client,
     *,
@@ -513,6 +629,56 @@ def _player_game_batting_to_row(row: PlayerGameBatting) -> dict[str, Any]:
     }
 
 
+def _batter_hits_training_example_to_row(
+    row: BatterHitsTrainingExample,
+) -> dict[str, Any]:
+    features = row.features
+    return {
+        "prop_snapshot_id": row.prop_snapshot_id,
+        "provider": row.provider,
+        "provider_event_id": row.provider_event_id,
+        "sport_key": row.sport_key,
+        "bookmaker_key": row.bookmaker_key,
+        "market_key": row.market_key,
+        "player_name": row.player_name,
+        "normalized_player_name": row.normalized_player_name,
+        "game_date": row.game_date.isoformat(),
+        "commence_time": _optional_iso(row.commence_time),
+        "home_team": row.home_team,
+        "away_team": row.away_team,
+        "line": row.line,
+        "side": row.side,
+        "actual_hits": row.actual_hits,
+        "target_over": row.target_over,
+        "feature_version": row.feature_version,
+        "prior_games_3": features.prior_games_3,
+        "prior_games_5": features.prior_games_5,
+        "prior_games_10": features.prior_games_10,
+        "hits_last_3": features.hits_last_3,
+        "hits_last_5": features.hits_last_5,
+        "hits_last_10": features.hits_last_10,
+        "hit_rate_last_3": features.hit_rate_last_3,
+        "hit_rate_last_5": features.hit_rate_last_5,
+        "hit_rate_last_10": features.hit_rate_last_10,
+        "avg_hits_last_10": features.avg_hits_last_10,
+        "avg_at_bats_last_10": features.avg_at_bats_last_10,
+        "avg_plate_appearances_last_10": (
+            features.avg_plate_appearances_last_10
+        ),
+        "avg_total_bases_last_10": features.avg_total_bases_last_10,
+        "strikeout_rate_last_10": features.strikeout_rate_last_10,
+        "walk_rate_last_10": features.walk_rate_last_10,
+        "season_games_before": features.season_games_before,
+        "season_hits_before": features.season_hits_before,
+        "season_hit_rate_before": features.season_hit_rate_before,
+        "season_avg_hits_before": features.season_avg_hits_before,
+        "has_prior_batting_history": features.has_prior_batting_history,
+        "is_cold_start": features.is_cold_start,
+        "metadata": row.metadata,
+        "updated_at": _iso(datetime.now(UTC)),
+    }
+
+
 def _dedupe_player_stats_events(
     rows: list[dict[str, Any]],
 ) -> list[PlayerGameEventContext]:
@@ -569,6 +735,33 @@ def _candidate_from_row(row: dict[str, Any]) -> PropCandidate:
             row.get("source_book_updated_at")
         ),
         captured_at=_parse_datetime(row["captured_at"]),
+        raw_payload=row.get("raw_payload") or {},
+    )
+
+
+def _player_game_batting_from_row(row: dict[str, Any]) -> PlayerGameBatting:
+    return PlayerGameBatting(
+        provider=row["provider"],
+        provider_event_id=row["provider_event_id"],
+        sport_key=row["sport_key"],
+        game_date=_parse_date(row["game_date"]),
+        commence_time=_parse_optional_datetime(row.get("commence_time")),
+        home_team=row.get("home_team"),
+        away_team=row.get("away_team"),
+        player_name=row["player_name"],
+        normalized_player_name=row["normalized_player_name"],
+        team=row.get("team"),
+        opponent=row.get("opponent"),
+        is_home=row.get("is_home"),
+        hits=row.get("hits"),
+        at_bats=row.get("at_bats"),
+        plate_appearances=row.get("plate_appearances"),
+        walks=row.get("walks"),
+        strikeouts=row.get("strikeouts"),
+        total_bases=row.get("total_bases"),
+        rbis=row.get("rbis"),
+        runs=row.get("runs"),
+        home_runs=row.get("home_runs"),
         raw_payload=row.get("raw_payload") or {},
     )
 

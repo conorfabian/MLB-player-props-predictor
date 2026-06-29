@@ -3,12 +3,17 @@ from __future__ import annotations
 from datetime import UTC, date, datetime
 from typing import Any
 
-from app.domain import PlayerGameBatting
+from app.domain import (
+    BatterHitsFeatureRow,
+    BatterHitsTrainingExample,
+    PlayerGameBatting,
+)
 from app.repositories import (
     get_events_for_player_stats_backfill,
     get_completed_ingestion_runs,
     insert_candidate_predictions,
     publish_daily_board,
+    upsert_batter_hits_training_examples,
     upsert_player_game_batting_rows,
 )
 from jobs.generate_board import board_draft_from_ranked
@@ -237,3 +242,68 @@ def test_upsert_player_game_batting_rows_uses_idempotency_key() -> None:
     assert payload["normalized_player_name"] == "joseramirez"
     assert payload["hits"] is None
     assert payload["at_bats"] == 3
+
+
+def test_upsert_batter_hits_training_examples_is_idempotent() -> None:
+    fake = FakeSupabase()
+    example = BatterHitsTrainingExample(
+        prop_snapshot_id=101,
+        provider="propline",
+        provider_event_id="evt-1",
+        sport_key="baseball_mlb",
+        bookmaker_key="prizepicks",
+        market_key="batter_hits",
+        player_name="Jose Ramirez",
+        normalized_player_name="joseramirez",
+        game_date=date(2026, 6, 16),
+        commence_time=datetime(2026, 6, 16, 23, 0, tzinfo=UTC),
+        home_team="New York Yankees",
+        away_team="Boston Red Sox",
+        line=0.5,
+        side="over",
+        actual_hits=1,
+        target_over=True,
+        feature_version="rolling-batter-hits-v2",
+        features=BatterHitsFeatureRow(
+            prior_games_3=0,
+            prior_games_5=0,
+            prior_games_10=0,
+            hits_last_3=0,
+            hits_last_5=0,
+            hits_last_10=0,
+            hit_rate_last_3=None,
+            hit_rate_last_5=None,
+            hit_rate_last_10=None,
+            avg_hits_last_10=None,
+            avg_at_bats_last_10=None,
+            avg_plate_appearances_last_10=None,
+            avg_total_bases_last_10=None,
+            strikeout_rate_last_10=None,
+            walk_rate_last_10=None,
+            season_games_before=0,
+            season_hits_before=0,
+            season_hit_rate_before=None,
+            season_avg_hits_before=None,
+            has_prior_batting_history=False,
+            is_cold_start=True,
+        ),
+        metadata={"cold_start_reason": "no_prior_batting_games"},
+    )
+
+    upserted = upsert_batter_hits_training_examples(
+        fake,  # type: ignore[arg-type]
+        rows=[example],
+    )
+
+    table = fake.tables["batter_hits_training_examples"]
+    payload = table.upserted[0][0]
+    assert upserted == 1
+    assert table.on_conflict == (
+        "provider,provider_event_id,normalized_player_name,"
+        "sport_key,market_key,bookmaker_key,line,side"
+    )
+    assert payload["prop_snapshot_id"] == 101
+    assert payload["target_over"] is True
+    assert payload["hits_last_10"] == 0
+    assert payload["hit_rate_last_10"] is None
+    assert payload["is_cold_start"] is True

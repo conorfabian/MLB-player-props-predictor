@@ -68,6 +68,7 @@ Current migration:
 database/migrations/001_prop_ingestion_pipeline.sql
 database/migrations/002_board_grading.sql
 database/migrations/003_player_game_batting.sql
+database/migrations/004_batter_hits_training_examples.sql
 ```
 
 It adds:
@@ -81,6 +82,8 @@ It adds:
 - Grading columns on `board_picks`: `actual_value`, `graded_at`, and
   `grading_metadata`
 - `player_game_batting` for normalized completed player-game batting stats
+- `batter_hits_training_examples` for labeled feature rows built from
+  stored batter-hit prop candidates and pre-game batting history
 
 The full reproducible schema is mirrored in `database/schema.sql`.
 
@@ -94,6 +97,8 @@ select * from public.candidate_predictions order by created_at desc limit 20;
 select * from public.daily_boards order by slate_date desc limit 5;
 select * from public.board_picks order by board_id desc, rank asc limit 20;
 select * from public.player_game_batting order by game_date desc limit 20;
+select * from public.batter_hits_training_examples
+order by game_date desc limit 20;
 ```
 
 ## Commands
@@ -145,6 +150,47 @@ cd backend
 
 Apply `database/migrations/003_player_game_batting.sql` before running the
 non-dry-run player-game batting backfill.
+
+Batter hits training examples:
+
+```bash
+cd backend
+./.venv/bin/python -m jobs.build_batter_hits_training_examples --dry-run
+./.venv/bin/python -m jobs.build_batter_hits_training_examples
+./.venv/bin/python -m jobs.build_batter_hits_training_examples --slate-date YYYY-MM-DD
+./.venv/bin/python -m jobs.build_batter_hits_training_examples --start-date YYYY-MM-DD --end-date YYYY-MM-DD
+./.venv/bin/python -m jobs.build_batter_hits_training_examples --limit 50
+```
+
+Apply `database/migrations/004_batter_hits_training_examples.sql` before
+running the non-dry-run training example build.
+
+The training example job is CLI-only. It does not add a FastAPI endpoint,
+frontend UI, cron-job.org schedule, PyTorch model, or scorer replacement.
+Each row represents one labeled `batter_hits` over candidate. Labels come from
+same-game `player_game_batting.hits`; rolling features use only prior rows
+where `game_date < target game_date`.
+
+Cold-start candidates with a real same-game label and no prior batting history
+are persisted. Count fields are `0`, rate/average fields are `NULL`, and
+metadata includes `cold_start_reason = no_prior_batting_games`.
+
+Supabase inspection query:
+
+```sql
+select
+    game_date,
+    player_name,
+    line,
+    actual_hits,
+    target_over,
+    hits_last_10,
+    hit_rate_last_10,
+    season_hit_rate_before
+from public.batter_hits_training_examples
+order by game_date desc
+limit 20;
+```
 
 Scheduled daily board job:
 
@@ -267,6 +313,10 @@ the summary it would apply without updating `board_picks`.
 Dry-run player-game batting backfill reads stored PropLine snapshot events,
 fetches event stats, parses completed player-game batting rows, and prints the
 summary without writing `player_game_batting`.
+
+Dry-run batter hits training example builds read stored prop snapshots and
+player-game batting rows, compute labels/features, and print the summary
+without writing `batter_hits_training_examples`.
 
 Do not run the non-dry-run jobs against production until migrations are applied
 and dry runs/tests pass.
