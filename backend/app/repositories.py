@@ -424,6 +424,43 @@ def upsert_batter_hits_training_examples(
     return upserted
 
 
+BATTER_HITS_DATASET_HEALTH_COLUMNS = (
+    "id, game_date, target_over, line, is_cold_start, "
+    "hit_rate_last_3, hit_rate_last_5, hit_rate_last_10, "
+    "avg_hits_last_10, avg_at_bats_last_10, "
+    "avg_plate_appearances_last_10, avg_total_bases_last_10, "
+    "strikeout_rate_last_10, walk_rate_last_10, "
+    "season_hit_rate_before, season_avg_hits_before"
+)
+
+
+def get_batter_hits_training_example_health_rows(
+    supabase: Client,
+    *,
+    page_size: int = 1000,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
+    start = 0
+
+    while True:
+        end = start + page_size - 1
+        page = cast(
+            list[dict[str, Any]],
+            supabase.table("batter_hits_training_examples")
+            .select(BATTER_HITS_DATASET_HEALTH_COLUMNS)
+            .order("game_date")
+            .order("id")
+            .range(start, end)
+            .execute()
+            .data
+            or [],
+        )
+        rows.extend(page)
+        if len(page) < page_size:
+            return rows
+        start += page_size
+
+
 def create_model_run(
     supabase: Client,
     *,

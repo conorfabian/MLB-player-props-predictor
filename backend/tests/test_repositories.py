@@ -10,6 +10,7 @@ from app.domain import (
 )
 from app.repositories import (
     get_events_for_player_stats_backfill,
+    get_batter_hits_training_example_health_rows,
     get_completed_ingestion_runs,
     insert_candidate_predictions,
     publish_daily_board,
@@ -30,6 +31,9 @@ class FakeTable:
         self.inserted: list[Any] = []
         self.data = data or []
         self.limit_value: int | None = None
+        self.order_calls: list[str] = []
+        self.range_calls: list[tuple[int, int]] = []
+        self.range_value: tuple[int, int] | None = None
         self.upserted: list[Any] = []
         self.on_conflict: str | None = None
 
@@ -43,6 +47,7 @@ class FakeTable:
         return self
 
     def select(self, *_args: Any, **_kwargs: Any) -> "FakeTable":
+        self._selected = _args[0] if _args else None
         return self
 
     def eq(self, *_args: Any, **_kwargs: Any) -> "FakeTable":
@@ -58,14 +63,28 @@ class FakeTable:
         return self
 
     def order(self, *_args: Any, **_kwargs: Any) -> "FakeTable":
+        if _args:
+            self.order_calls.append(str(_args[0]))
         return self
 
     def limit(self, value: int) -> "FakeTable":
         self.limit_value = value
         return self
 
+    def range(self, start: int, end: int) -> "FakeTable":
+        self.range_calls.append((start, end))
+        self.range_value = (start, end)
+        return self
+
     def execute(self) -> FakeResult:
-        return FakeResult(self.data)
+        if self.range_value is None:
+            return FakeResult(self.data)
+        start, end = self.range_value
+        return FakeResult(self.data[start : end + 1])
+
+    @property
+    def selected(self) -> str | None:
+        return getattr(self, "_selected", None)
 
 
 class FakeSupabase:
@@ -198,6 +217,46 @@ def test_get_events_for_player_stats_backfill_dedupes_events() -> None:
 
     assert len(events) == 1
     assert events[0].provider_event_id == "evt-1"
+
+
+def test_get_batter_hits_training_example_health_rows_paginates() -> None:
+    fake = FakeSupabase()
+    rows = [
+        {
+            "game_date": "2026-06-01",
+            "id": index + 1,
+            "target_over": True,
+            "line": 0.5,
+            "is_cold_start": False,
+            "hit_rate_last_3": 1.0,
+            "hit_rate_last_5": 1.0,
+            "hit_rate_last_10": 1.0,
+            "avg_hits_last_10": 1.0,
+            "avg_at_bats_last_10": 4.0,
+            "avg_plate_appearances_last_10": 4.0,
+            "avg_total_bases_last_10": 1.0,
+            "strikeout_rate_last_10": 0.25,
+            "walk_rate_last_10": 0.1,
+            "season_hit_rate_before": 1.0,
+            "season_avg_hits_before": 1.0,
+        }
+        for index in range(5)
+    ]
+    fake.tables["batter_hits_training_examples"] = FakeTable(rows)
+
+    result = get_batter_hits_training_example_health_rows(
+        fake,  # type: ignore[arg-type]
+        page_size=2,
+    )
+
+    table = fake.tables["batter_hits_training_examples"]
+    assert len(result) == 5
+    assert table.range_calls == [(0, 1), (2, 3), (4, 5)]
+    assert table.order_calls == ["game_date", "id"] * 3
+    assert table.selected is not None
+    assert "*" not in table.selected
+    assert "id" in table.selected
+    assert "game_date" in table.selected
 
 
 def test_upsert_player_game_batting_rows_uses_idempotency_key() -> None:

@@ -165,8 +165,9 @@ cd backend
 Apply `database/migrations/004_batter_hits_training_examples.sql` before
 running the non-dry-run training example build.
 
-The training example job is CLI-only. It does not add a FastAPI endpoint,
-frontend UI, cron-job.org schedule, PyTorch model, or scorer replacement.
+The training example job can be run locally from the CLI or in production
+through an authenticated FastAPI endpoint. It does not add frontend UI,
+PyTorch model, or scorer replacement.
 Each row represents one labeled `batter_hits` over candidate. Labels come from
 same-game `player_game_batting.hits`; rolling features use only prior rows
 where `game_date < target game_date`.
@@ -190,6 +191,23 @@ select
 from public.batter_hits_training_examples
 order by game_date desc
 limit 20;
+```
+
+Production training example endpoint verification:
+
+```bash
+BACKEND_URL=https://mlb-player-props-predictor.onrender.com
+
+curl -X POST "$BACKEND_URL/api/jobs/build-batter-hits-training-examples" \
+  -H "Authorization: Bearer $CRON_JOB_SECRET" \
+  -H "Content-Type: application/json" \
+  -d '{"dry_run": true}'
+```
+
+Dataset health verification:
+
+```bash
+curl "$BACKEND_URL/api/dataset-health/batter-hits"
 ```
 
 ## Baseline Backtesting
@@ -238,6 +256,24 @@ Header: Content-Type: application/json
 Body: {}
 Schedule: 00:00 America/New_York
 ```
+
+Scheduled batter hits training example build:
+
+```text
+URL: https://mlb-player-props-predictor.onrender.com/api/jobs/build-batter-hits-training-examples
+Method: POST
+Header: Authorization: Bearer <CRON_JOB_SECRET>
+Header: Content-Type: application/json
+Body: {}
+Schedule: 05:45 America/New_York
+```
+
+Recommended daily job order:
+
+1. `POST /api/jobs/daily-board` around 00:00 America/New_York.
+2. `POST /api/jobs/grade-board` around 05:00 America/New_York.
+3. `POST /api/jobs/backfill-player-game-batting` around 05:30 America/New_York.
+4. `POST /api/jobs/build-batter-hits-training-examples` around 05:45 America/New_York.
 
 Set the same `CRON_JOB_SECRET` value in Render and cron-job.org. Keep it
 backend-only; do not prefix it with `NEXT_PUBLIC_`.
