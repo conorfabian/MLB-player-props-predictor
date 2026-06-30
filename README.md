@@ -192,6 +192,39 @@ order by game_date desc
 limit 20;
 ```
 
+## Baseline Backtesting
+
+The baseline backtest is an offline-only job for evaluating simple historical
+models against stored `batter_hits_training_examples`. It does not affect
+production picks, does not replace `PlaceholderScorer`, does not add frontend
+UI, and writes local JSON reports only. Future PyTorch models should beat these
+baseline validation/test metrics before they are considered for production
+scoring.
+
+```bash
+cd backend
+./.venv/bin/python -m jobs.backtest_batter_hits_baselines
+./.venv/bin/python -m jobs.backtest_batter_hits_baselines --start-date YYYY-MM-DD --end-date YYYY-MM-DD
+./.venv/bin/python -m jobs.backtest_batter_hits_baselines --min-prior-games 5
+./.venv/bin/python -m jobs.backtest_batter_hits_baselines --output-dir artifacts/backtests
+```
+
+The default split sorts examples chronologically by `game_date`, then trains on
+the first 70%, validates on the next 15%, and tests on the final 15%. You can
+also provide explicit chronological boundaries:
+
+```bash
+cd backend
+./.venv/bin/python -m jobs.backtest_batter_hits_baselines --train-end-date YYYY-MM-DD --test-start-date YYYY-MM-DD
+```
+
+Reports are saved under `backend/artifacts/backtests/` by default when run from
+the backend directory.
+
+Treat backtests with fewer than 30 test slates as smoke tests only. They are
+useful for checking that the pipeline runs end-to-end, but the top-k hit rates
+and model comparisons are too slate-sensitive to treat as stable model evidence.
+
 Scheduled daily board job:
 
 cron-job.org calls one authenticated backend endpoint. The endpoint runs

@@ -18,7 +18,10 @@ frontend/.env.local
 frontend/.env.*.local
 
 # Model artifacts added later
+backend/artifacts/
 artifacts/
+*.joblib
+*.pkl
 *.pt
 *.pth
 

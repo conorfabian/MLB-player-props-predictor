@@ -6,7 +6,10 @@ requires-python = ">=3.12"
 dependencies = [
     "fastapi>=0.115.0",
     "httpx>=0.27.0",
+    "numpy>=2.0.0",
+    "pandas>=2.2.0",
     "python-dotenv>=1",
+    "scikit-learn>=1.5.0",
     "supabase>=2",
     "uvicorn[standard]>=0.32.0",
 ]
@@ -22,7 +25,7 @@ dev = [
 testpaths = ["tests"]
 
 [tool.setuptools.packages.find]
-include = ["app*", "jobs*"]
+include = ["app*", "jobs*", "ml*"]
 
 [tool.ruff]
 line-length = 79
