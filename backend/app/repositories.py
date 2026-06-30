@@ -461,6 +461,79 @@ def get_batter_hits_training_example_health_rows(
         start += page_size
 
 
+PUBLIC_BOARD_COLUMNS = (
+    "id, slate_date, generated_at, model_version, status"
+)
+
+PUBLIC_BOARD_PICK_COLUMNS = (
+    "board_id, rank, player_name, team, opponent, prop_type, line, side, "
+    "model_probability, game_time, result_status, actual_value, graded_at"
+)
+
+
+def get_published_board_rows(
+    supabase: Client,
+    *,
+    start_date: date | None = None,
+    end_date: date | None = None,
+    limit: int | None = None,
+) -> list[dict[str, Any]]:
+    query = (
+        supabase.table("daily_boards")
+        .select(PUBLIC_BOARD_COLUMNS)
+        .eq("status", "published")
+        .order("slate_date", desc=True)
+    )
+    if start_date is not None:
+        query = query.gte("slate_date", start_date.isoformat())
+    if end_date is not None:
+        query = query.lte("slate_date", end_date.isoformat())
+    if limit is not None:
+        query = query.limit(limit)
+
+    boards = cast(list[dict[str, Any]], query.execute().data or [])
+    if not boards:
+        return []
+
+    picks_by_board_id = _public_picks_by_board_id(
+        supabase,
+        board_ids=[board["id"] for board in boards],
+    )
+    return [
+        {
+            **board,
+            "picks": picks_by_board_id.get(board["id"], []),
+        }
+        for board in boards
+    ]
+
+
+def _public_picks_by_board_id(
+    supabase: Client,
+    *,
+    board_ids: list[int],
+) -> dict[int, list[dict[str, Any]]]:
+    picks = cast(
+        list[dict[str, Any]],
+        supabase.table("board_picks")
+        .select(PUBLIC_BOARD_PICK_COLUMNS)
+        .in_("board_id", board_ids)
+        .order("rank")
+        .execute()
+        .data
+        or [],
+    )
+    picks_by_board_id: dict[int, list[dict[str, Any]]] = {
+        board_id: [] for board_id in board_ids
+    }
+    for pick in picks:
+        board_id = int(pick["board_id"])
+        public_pick = {key: value for key, value in pick.items()}
+        public_pick.pop("board_id", None)
+        picks_by_board_id.setdefault(board_id, []).append(public_pick)
+    return picks_by_board_id
+
+
 def create_model_run(
     supabase: Client,
     *,

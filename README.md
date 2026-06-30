@@ -210,6 +210,24 @@ Dataset health verification:
 curl "$BACKEND_URL/api/dataset-health/batter-hits"
 ```
 
+Published board performance verification:
+
+```bash
+BACKEND_URL=https://mlb-player-props-predictor.onrender.com
+
+curl "$BACKEND_URL/api/performance/summary"
+curl "$BACKEND_URL/api/performance/summary?days=7"
+
+curl "$BACKEND_URL/api/results/recent"
+curl "$BACKEND_URL/api/results/recent?limit=3"
+```
+
+Performance endpoints describe the currently published board history. They are
+not offline model backtests. Hit rate is calculated as hits divided by hits plus
+misses; pushes, pending, postponed, and canceled picks are excluded from hit-rate
+denominators. Pushes are counted separately. Production scoring remains
+`placeholder-v0` until offline baselines and modeling prove a better scorer.
+
 ## Baseline Backtesting
 
 The baseline backtest is an offline-only job for evaluating simple historical

@@ -5,7 +5,7 @@ from datetime import UTC, date, datetime, timedelta
 from threading import Lock
 from typing import Any, cast
 
-from fastapi import Body, FastAPI, Header, HTTPException
+from fastapi import Body, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -14,12 +14,18 @@ from app.dataset_health import get_batter_hits_dataset_health
 from app.domain import FeatureBuildSummary
 from app.features import run_batter_hits_training_example_build
 from app.grading import GradingSummary, run_board_grading
+from app.performance import get_performance_summary, get_recent_results
 from app.pipeline import DailyBoardJobSummary, run_daily_board_job
 from app.player_game_batting import (
     PlayerGameBattingBackfillSummary,
     run_player_game_batting_backfill,
 )
-from app.schemas import BoardResponse, PickResponse
+from app.schemas import (
+    BoardResponse,
+    PerformanceSummaryResponse,
+    PickResponse,
+    RecentResultsResponse,
+)
 from app.settings import get_api_settings
 
 logger = logging.getLogger(__name__)
@@ -317,6 +323,31 @@ def get_latest_board() -> BoardResponse:
 @app.get("/api/dataset-health/batter-hits")
 def get_batter_hits_dataset_health_endpoint() -> dict[str, Any]:
     return get_batter_hits_dataset_health()
+
+
+@app.get(
+    "/api/performance/summary",
+    response_model=PerformanceSummaryResponse,
+)
+def get_performance_summary_endpoint(
+    days: int = Query(default=30, gt=0, le=365),
+    limit_slates: int | None = Query(default=None, gt=0, le=365),
+) -> dict[str, Any]:
+    return get_performance_summary(
+        days=days,
+        limit_slates=limit_slates,
+        today=_current_slate_date(),
+    )
+
+
+@app.get(
+    "/api/results/recent",
+    response_model=RecentResultsResponse,
+)
+def get_recent_results_endpoint(
+    limit: int = Query(default=7, gt=0, le=30),
+) -> dict[str, Any]:
+    return get_recent_results(limit=limit)
 
 
 def _require_cron_auth(authorization: str | None) -> None:

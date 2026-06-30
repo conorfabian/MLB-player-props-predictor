@@ -1,5 +1,7 @@
 import { ApiStatus } from "@/components/ApiStatus";
 import { DailyBoard } from "@/components/DailyBoard";
+import { PerformanceSummary } from "@/components/PerformanceSummary";
+import { RecentResults } from "@/components/RecentResults";
 
 export default function Home() {
   return (
@@ -12,6 +14,8 @@ export default function Home() {
 
       <ApiStatus />
       <DailyBoard />
+      <PerformanceSummary />
+      <RecentResults />
     </main>
   );
 }
